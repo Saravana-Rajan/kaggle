@@ -17,7 +17,11 @@ from onnx import helper, TensorProto
 
 # Kaggle paths
 DATA = '/kaggle/input/competitions/neurogolf-2026/'
-THISRAY = '/kaggle/input/thisray-submission/submission.zip'
+# Auto-locate thisray's submission.zip in /kaggle/input/
+import glob as _g
+_t = _g.glob('/kaggle/input/*/submission.zip')
+THISRAY = _t[0] if _t else '/kaggle/input/thisray-submission/submission.zip'
+print(f"Using thisray submission at: {THISRAY}")
 OUT = pathlib.Path('/kaggle/working/improvements')
 OUT.mkdir(exist_ok=True)
 
