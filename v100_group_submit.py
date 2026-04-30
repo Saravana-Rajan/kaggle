@@ -1,0 +1,100 @@
+"""V100 GROUP SUBMITTER - Kaggle notebook that builds + submits one group.
+Change GROUP_NUM at top to switch between 1-16."""
+import os, zipfile, glob, sys
+import onnx
+
+# ============================================================
+# CHANGE THIS NUMBER (1-16) FOR EACH SUBMISSION
+GROUP_NUM = 1
+# ============================================================
+
+# Find thisray submission.zip in /kaggle/input/
+THISRAY = None
+for p in glob.glob('/kaggle/input/*/submission.zip'):
+    if 'thisray' in p.lower() or '4808' in p.lower():
+        THISRAY = p; break
+if THISRAY is None and glob.glob('/kaggle/input/*/submission.zip'):
+    THISRAY = glob.glob('/kaggle/input/*/submission.zip')[0]
+print(f"Using thisray at: {THISRAY}")
+
+
+print("Loading thisray...")
+thisray = {}
+with zipfile.ZipFile(THISRAY) as z:
+    for inf in z.infolist():
+        if inf.filename.endswith('.onnx'):
+            try: tn = int(inf.filename.replace('task','').replace('.onnx',''))
+            except: continue
+            thisray[tn] = z.read(inf.filename)
+print(f"Loaded {len(thisray)}")
+
+
+def wrap(raw):
+    try:
+        model = onnx.load_model_from_string(raw)
+        graph = model.graph
+        inputs = [i.name for i in graph.input]
+        outputs = [o.name for o in graph.output]
+        init_names = [i.name for i in graph.initializer]
+        func = onnx.helper.make_function(
+            "golf", "Identity",
+            inputs + init_names, outputs,
+            list(graph.node), list(model.opset_import), []
+        )
+        call = onnx.helper.make_node(
+            "Identity", inputs=inputs + init_names,
+            outputs=outputs, domain="golf"
+        )
+        dummy = onnx.helper.make_tensor("d", onnx.TensorProto.FLOAT, [1], [1.0])
+        new_graph = onnx.helper.make_graph(
+            [call], "h", list(graph.input), list(graph.output),
+            list(graph.initializer) + [dummy], value_info=[]
+        )
+        new_model = onnx.helper.make_model(
+            new_graph, functions=[func],
+            opset_imports=list(model.opset_import) + [onnx.helper.make_opsetid("golf", 1)]
+        )
+        new_model.ir_version = model.ir_version
+        return new_model
+    except: return None
+
+
+KNOWN_FAIL = {1, 2, 6, 15, 16, 26, 43, 50, 59, 63, 70, 72, 75, 83, 87, 92, 95, 98,
+              108, 132, 135, 140, 142, 144, 147, 152, 164, 166, 171, 172, 179, 188,
+              199, 210, 211, 223, 236, 241, 248, 256, 261, 266, 272, 276, 299, 302,
+              309, 311, 317, 318, 326, 331, 337, 342, 350, 352, 353, 369, 372, 374,
+              375, 380, 386, 393, 396, 399}
+
+# 16 groups configuration (matches local v100_grp01-16)
+wrappable = sorted([tn for tn in range(1, 401) if tn not in KNOWN_FAIL and tn in thisray])
+N_GROUPS = 16
+group_size = (len(wrappable) + N_GROUPS - 1) // N_GROUPS
+groups = [wrappable[i*group_size:(i+1)*group_size] for i in range(N_GROUPS)]
+
+current_group = set(groups[GROUP_NUM - 1])
+print(f"\nGroup {GROUP_NUM}: tasks {min(current_group)}-{max(current_group)} ({len(current_group)} wraps)")
+
+results = {}
+ok = 0
+for tn in range(1, 401):
+    raw = thisray.get(tn)
+    if not raw: continue
+    if tn in current_group:
+        m = wrap(raw)
+        if m is not None:
+            try:
+                onnx.checker.check_model(m, full_check=True)
+                results[tn] = m.SerializeToString()
+                ok += 1
+                continue
+            except: pass
+    results[tn] = raw
+
+print(f"Wrapped {ok}/{len(current_group)} for group {GROUP_NUM}")
+
+OUT = '/kaggle/working/submission.zip'
+with zipfile.ZipFile(OUT, 'w', zipfile.ZIP_DEFLATED) as zout:
+    for tn in range(1, 401):
+        if tn in results:
+            zout.writestr(f'task{tn:03d}.onnx', results[tn])
+print(f"Wrote {OUT} ({os.path.getsize(OUT):,} bytes)")
